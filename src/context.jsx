@@ -6,8 +6,34 @@ const RISK_KEYWORDS = [
   'SECRET', 'TOKEN', 'PASSWORD', 'PASS', 'PRIVATE_KEY',
   'AWS', 'GCP', 'AZURE', 'DOCKER', 'REGISTRY',
   'PROD', 'DATABASE', 'SSH', 'API_KEY', 'STRIPE',
-  'OAUTH', 'JWT', 'SIGNING', 'WEBHOOK',
+  'OAUTH', 'JWT', 'SIGNING', 'WEBHOOK', 'CREDENTIAL',
+  'PRIVATE', 'CERTIFICATE', 'CERT', 'PEM', 'KEY',
+  'AUTH', 'ACCESS_KEY', 'SECRET_KEY',
 ];
+
+// Regex patterns matched against variable VALUES to detect actual secret material
+const VALUE_PATTERNS = [
+  { label: 'AWS Access Key ID',     re: /\bAKIA[0-9A-Z]{16}\b/,                             sev: 'critical' },
+  { label: 'AWS Secret Access Key', re: /[A-Za-z0-9+/]{40}={0,2}/,                          sev: 'high'     },
+  { label: 'Private Key Block',     re: /-----BEGIN (?:\w+ )?PRIVATE KEY/,                   sev: 'critical' },
+  { label: 'GitLab PAT',            re: /\bglpat-[A-Za-z0-9_-]{20,}/,                       sev: 'critical' },
+  { label: 'GitHub Token',          re: /\bgh[pousr]_[A-Za-z0-9]{36,}/,                     sev: 'critical' },
+  { label: 'Stripe Secret Key',     re: /\bsk_(?:live|test)_[0-9A-Za-z]{24,}/,              sev: 'critical' },
+  { label: 'Google API Key',        re: /\bAIza[0-9A-Za-z_-]{35}\b/,                        sev: 'high'     },
+  { label: 'JWT Token',             re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,     sev: 'high'     },
+  { label: 'Slack Webhook URL',     re: /hooks\.slack\.com\/services\/[A-Z0-9]{9,}\//,      sev: 'high'     },
+  { label: 'Discord Webhook URL',   re: /discord(?:app)?\.com\/api\/webhooks\/\d{17,19}\//,  sev: 'medium'   },
+  { label: 'Telegram Bot Token',    re: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/,                  sev: 'high'     },
+  { label: 'Credentials in URL',    re: /https?:\/\/[^:@\s]{2,}:[^@\s]{4,}@[a-z]/,          sev: 'high'     },
+  { label: 'Stripe Public Key',     re: /\bpk_(?:live|test)_[0-9A-Za-z]{24,}/,              sev: 'medium'   },
+  { label: 'NPM Token',             re: /\bnpm_[A-Za-z0-9]{36}\b/,                          sev: 'high'     },
+  { label: 'Heroku API Key',        re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/, sev: 'medium' },
+];
+
+export function scanValueForSecrets(value) {
+  if (!value) return [];
+  return VALUE_PATTERNS.filter((p) => p.re.test(value));
+}
 
 export function analyzeVariables(variables) {
   const findings = [];
@@ -17,6 +43,22 @@ export function analyzeVariables(variables) {
     const key = v.key.toUpperCase();
     const matched = RISK_KEYWORDS.filter((k) => key.includes(k));
     const isRisky = matched.length > 0;
+
+    // Value-based secret pattern detection (highest priority)
+    const valueHits = scanValueForSecrets(v.value);
+    if (valueHits.length > 0) {
+      findings.push({
+        id: `F-${findingNum++}`,
+        severity: valueHits[0].sev,
+        title: `Secret pattern detected in variable value: ${valueHits[0].label}`,
+        asset: `${v.sourcePath} → ${v.key}`,
+        category: 'secret-exposure',
+        evidence: `Value matches pattern "${valueHits[0].label}"`,
+        description: `The value of ${v.key} contains what appears to be a ${valueHits[0].label}. This credential is directly readable via the GitLab API with the current token.`,
+        recommendation: 'Rotate this credential immediately. Use a secrets manager instead of CI/CD variables.',
+        sourceRef: { kind: 'variable', id: v.id },
+      });
+    }
 
     if (!v.masked && isRisky) {
       findings.push({
@@ -39,7 +81,7 @@ export function analyzeVariables(variables) {
         asset: `${v.sourcePath} → ${v.key}`,
         category: 'variables',
         evidence: `protected=false on variable matching [${matched.join(', ')}]`,
-        description: `Any branch can read ${v.key}, including unprotected ones — enabling secret exfiltration.`,
+        description: `Any branch can read ${v.key}, including unprotected ones — enabling secret exfiltration via CI/CD jobs.`,
         recommendation: 'Set protected=true and limit envScope.',
         sourceRef: { kind: 'variable', id: v.id },
       });
@@ -57,6 +99,48 @@ export function analyzeVariables(variables) {
         sourceRef: { kind: 'variable', id: v.id },
       });
     }
+    // File-type variable containing sensitive key — often holds PEM/cert files
+    if (v.type === 'file' && isRisky) {
+      findings.push({
+        id: `F-${findingNum++}`,
+        severity: 'high',
+        title: `File-type variable may contain key material`,
+        asset: `${v.sourcePath} → ${v.key}`,
+        category: 'variables',
+        evidence: `variable_type=file, key matches [${matched.join(', ')}]`,
+        description: `File-type variables often contain PEM files, certificates, or credentials written to disk during CI. Value is readable via API.`,
+        recommendation: 'Audit file contents. Use masked+protected if possible.',
+        sourceRef: { kind: 'variable', id: v.id },
+      });
+    }
+    // Risky variable scoped to all environments
+    if (isRisky && v.envScope === '*') {
+      findings.push({
+        id: `F-${findingNum++}`,
+        severity: 'medium',
+        title: `Sensitive variable exposed to all environments`,
+        asset: `${v.sourcePath} → ${v.key}`,
+        category: 'variables',
+        evidence: `environment_scope=*, key matches [${matched.join(', ')}]`,
+        description: `${v.key} is available in every environment including dev/staging — increasing blast radius of a breach.`,
+        recommendation: 'Scope to production environment only.',
+        sourceRef: { kind: 'variable', id: v.id },
+      });
+    }
+    // Group-level risky variable cascades to all child projects
+    if (v.source === 'group' && isRisky) {
+      findings.push({
+        id: `F-${findingNum++}`,
+        severity: 'high',
+        title: `Group-level secret cascades to all child projects`,
+        asset: `${v.sourcePath} (group) → ${v.key}`,
+        category: 'variables',
+        evidence: `source=group, key matches [${matched.join(', ')}]`,
+        description: `Group variables are inherited by every project in the group. ${v.key} is accessible to any CI job across all child projects.`,
+        recommendation: 'Move to project-level or use a secrets manager with explicit grants.',
+        sourceRef: { kind: 'variable', id: v.id },
+      });
+    }
   }
 
   return findings;
@@ -65,18 +149,24 @@ export function analyzeVariables(variables) {
 export function computeVarRisk(v) {
   const key = v.key.toUpperCase();
   const matched = RISK_KEYWORDS.filter((k) => key.includes(k));
-  if (!matched.length) return 'low';
+  const valueHits = scanValueForSecrets(v.value);
+  if (valueHits.length > 0) return valueHits[0].sev === 'critical' ? 'critical' : 'high';
+  if (!matched.length) return 'none';
   if (!v.masked || v.raw) return 'critical';
   if (!v.protected) return 'high';
+  if (v.source === 'group') return 'high';
   return 'medium';
 }
 
 export function computeVarTags(v) {
   const key = v.key.toUpperCase();
-  const tags = RISK_KEYWORDS.filter((k) => key.includes(k)).slice(0, 4);
+  const tags = RISK_KEYWORDS.filter((k) => key.includes(k)).slice(0, 3);
+  const valueHits = scanValueForSecrets(v.value);
+  if (valueHits.length > 0) tags.unshift(valueHits[0].label.toUpperCase().replace(/ /g, '_').slice(0, 12));
   if (!v.masked) tags.push('UNMASKED');
   if (!v.protected) tags.push('UNPROTECTED');
-  return tags;
+  if (v.type === 'file') tags.push('FILE');
+  return tags.slice(0, 5);
 }
 
 // ── Context ────────────────────────────────────────────────────────────────

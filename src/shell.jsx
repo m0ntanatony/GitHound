@@ -24,6 +24,9 @@ const Repository  = lazy(() => import('./screens/Repository.jsx'));
 const ProjectDetail = lazy(() => import('./screens/ProjectDetail.jsx'));
 const GroupDetail = lazy(() => import('./screens/GroupDetail.jsx'));
 const Downloads   = lazy(() => import('./screens/Downloads.jsx'));
+const DeployKeys  = lazy(() => import('./screens/DeployKeys.jsx'));
+const Webhooks    = lazy(() => import('./screens/Webhooks.jsx'));
+const Artifacts   = lazy(() => import('./screens/Artifacts.jsx'));
 const MRsList     = lazy(() => import('./screens/MRsList.jsx'));
 const Branches    = lazy(() => import('./screens/Branches.jsx'));
 const Commits     = lazy(() => import('./screens/Commits.jsx'));
@@ -60,6 +63,9 @@ const NAV_ITEMS = [
   { section: 'ACCESS' },
   { key: 'users',       label: 'Users',          icon: 'users'    },
   { key: 'permissions', label: 'Permissions',    icon: 'shield'   },
+  { key: 'deploykeys',  label: 'Deploy Keys',    icon: 'key'      },
+  { key: 'webhooks',    label: 'Webhooks',       icon: 'link',    danger: true },
+  { key: 'artifacts',   label: 'Artifacts',      icon: 'archive'  },
   { key: 'downloads',   label: 'Downloads',      icon: 'download' },
   { section: 'AUDIT' },
   { key: 'security',    label: 'Security',       icon: 'bug',     danger: true },
@@ -115,6 +121,9 @@ export function Shell({ route, routeArg, onNav, tweaks, setTweak }) {
     case 'users':       screen = <Users onNav={onNav}/>; break;
     case 'user':        screen = <UserDetail userId={routeArg} onNav={onNav}/>; break;
     case 'permissions': screen = <Permissions/>; break;
+    case 'deploykeys':  screen = <DeployKeys/>; break;
+    case 'webhooks':    screen = <Webhooks/>; break;
+    case 'artifacts':   screen = <Artifacts/>; break;
     case 'downloads':   screen = <Downloads/>; break;
     case 'security':    screen = <Security onNav={onNav}/>; break;
     case 'settings':    screen = <Settings tweaks={tweaks} setTweak={setTweak} onDisconnect={gh.disconnect}/>; break;

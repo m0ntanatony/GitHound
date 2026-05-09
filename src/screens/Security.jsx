@@ -3,6 +3,69 @@ import { useGH } from '../context.jsx';
 import { I } from '../icons.jsx';
 import { Badge, SeverityBadge, SeverityBar, RiskBadge, StatCard, Drawer, Skeleton, Empty } from '../components.jsx';
 
+function exportReport(findings, variables, instance, tokenUser) {
+  const ts = new Date().toISOString();
+  const md = [
+    `# GitHound Security Report`,
+    `**Instance:** ${instance?.gitlabUrl || instance?.shortUrl || '—'}  `,
+    `**Token user:** @${tokenUser?.username || '—'}  `,
+    `**Generated:** ${ts}  `,
+    `**Findings:** ${findings.length}  `,
+    `**Variables scanned:** ${variables.length}`,
+    '',
+    '---',
+    '',
+    '## Findings',
+    '',
+    ...findings.map(f => [
+      `### [${f.severity.toUpperCase()}] ${f.title}`,
+      `**ID:** ${f.id}  `,
+      `**Category:** ${f.category}  `,
+      `**Asset:** \`${f.asset}\`  `,
+      `**Evidence:** ${f.evidence}  `,
+      '',
+      f.description,
+      '',
+      `> **Recommendation:** ${f.recommendation}`,
+      '',
+    ].join('\n')),
+    '## Variables Summary',
+    '',
+    '| Key | Source | Risk | Masked | Protected |',
+    '|-----|--------|------|--------|-----------|',
+    ...variables
+      .filter(v => v.risk === 'critical' || v.risk === 'high')
+      .map(v => `| \`${v.key}\` | ${v.sourcePath} | ${v.risk} | ${v.masked} | ${v.protected} |`),
+  ].join('\n');
+
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `githound-report-${ts.slice(0, 10)}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportJson(findings, variables, instance, tokenUser) {
+  const payload = {
+    meta: { generated: new Date().toISOString(), instance: instance?.gitlabUrl, user: tokenUser?.username },
+    summary: { total: findings.length, critical: findings.filter(f => f.severity === 'critical').length, high: findings.filter(f => f.severity === 'high').length },
+    findings,
+    riskyVariables: variables.filter(v => v.risk === 'critical' || v.risk === 'high').map(v => ({
+      id: v.id, key: v.key, source: v.source, sourcePath: v.sourcePath,
+      risk: v.risk, masked: v.masked, protected: v.protected, envScope: v.envScope, tags: v.tags,
+    })),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `githound-report-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function Security({ embedded, onNav }) {
   const gh = useGH();
   const [sev, setSev] = useState('all');
@@ -111,6 +174,12 @@ export default function Security({ embedded, onNav }) {
           <div className="page-subtitle">{gh.findings.length} findings detected · based on {gh.variables.length} variables</div>
         </div>
         <div className="page-actions">
+          <button className="btn" onClick={() => exportJson(gh.findings, gh.variables, gh.instance, gh.tokenUser)}>
+            <I.download size={13}/> JSON
+          </button>
+          <button className="btn" onClick={() => exportReport(gh.findings, gh.variables, gh.instance, gh.tokenUser)}>
+            <I.download size={13}/> Markdown
+          </button>
           <button className="btn" onClick={() => gh.loadVariables(gh.projects)}><I.refresh size={13}/> Re-scan</button>
         </div>
       </div>

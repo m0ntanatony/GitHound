@@ -2,6 +2,7 @@ import React from 'react';
 import { useGH } from '../context.jsx';
 import { I } from '../icons.jsx';
 import { Card, StatCard, Badge, SeverityBadge, RiskBadge, StatusDot, Skeleton } from '../components.jsx';
+import { scanValueForSecrets } from '../context.jsx';
 
 export default function Overview({ onNav }) {
   const gh = useGH();
@@ -24,6 +25,14 @@ export default function Overview({ onNav }) {
   };
 
   const scopes = (u.scopes || []);
+
+  // Attack surface derived from token capabilities
+  const canWrite = scopes.some(s => s === 'api' || s === 'write_repository');
+  const writableProjects = canWrite ? gh.projects.length : 0;
+  const secretsExposed = gh.variables.filter(v => scanValueForSecrets(v.value).length > 0).length;
+  const onlineRunners = gh.runners.filter(r => r.status === 'online').length;
+  const adminUsers = gh.users.filter(u2 => u2.admin).length;
+  const no2fa = gh.users.filter(u2 => u2.two_factor_enabled === false).length;
 
   return (
     <div className="page">
@@ -138,6 +147,39 @@ export default function Overview({ onNav }) {
           )}
         </Card>
       </div>
+
+      {/* Token Attack Surface */}
+      <Card title="Token Attack Surface" style={{ marginBottom: 12 }} action={
+        <button className="btn sm" onClick={() => onNav('security')}>
+          Full audit <I.arrowR size={11}/>
+        </button>
+      }>
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+          {[
+            { l: 'Instance admin',    v: u.is_admin ? 'YES' : 'no',       danger: u.is_admin },
+            { l: 'Token write access',v: canWrite ? 'YES' : 'read-only',  danger: canWrite },
+            { l: 'Secrets in values', v: secretsExposed,                  danger: secretsExposed > 0 },
+            { l: 'Online runners',    v: onlineRunners,                   danger: onlineRunners > 0 },
+            { l: 'Admin accounts',    v: adminUsers,                      danger: adminUsers > 1 },
+            { l: 'No-2FA users',      v: gh.users.length > 0 ? no2fa : '—', danger: no2fa > 0 },
+          ].map(s => (
+            <div key={s.l} className="stat-card" style={{ padding: '8px 10px' }}>
+              <span className="label">{s.l}</span>
+              <span className="value" style={{ fontSize: 16, color: s.danger ? 'var(--red)' : 'inherit' }}>{String(s.v)}</span>
+            </div>
+          ))}
+        </div>
+        {u.is_admin && (
+          <div style={{ padding: '8px 10px', background: 'var(--red-08)', borderRadius: 4, border: '1px solid var(--red-20)', fontSize: 12, color: 'var(--red)' }}>
+            <strong>Admin token</strong> — can impersonate any user, read all projects, modify any variable, and issue new tokens.
+          </div>
+        )}
+        {!u.is_admin && secretsExposed > 0 && (
+          <div style={{ padding: '8px 10px', background: 'var(--red-08)', borderRadius: 4, border: '1px solid var(--red-20)', fontSize: 12, color: 'var(--red)' }}>
+            <strong>{secretsExposed} variable{secretsExposed > 1 ? 's' : ''}</strong> contain recognisable secret patterns in their values — directly readable via this token.
+          </div>
+        )}
+      </Card>
 
       {/* Top Findings */}
       {findings.length > 0 && (
