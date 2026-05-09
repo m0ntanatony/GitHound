@@ -1,0 +1,10 @@
+services:
+  githound:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - SESSION_SECRET=${SESSION_SECRET:-githound-secret-change-me}
+    restart: unless-stopped
